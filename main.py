@@ -1,6 +1,7 @@
 """
 Домашнее задание к лекции 6. «Web-scrapping»
 Парсинг свежих статей с Хабра по ключевым словам
+Поиск по всей доступной preview-информации (заголовок, preview, хабы, теги, автор)
 """
 
 import requests
@@ -11,7 +12,7 @@ from datetime import datetime
 # НАСТРОЙКИ
 # ============================================================
 
-KEYWORDS = ['дизайн', 'фото', 'web', 'python']
+KEYWORDS = ['дизайн', 'фото', 'web', 'python', 'алгоритм', 'аналитика']
 URL = 'https://habr.com/ru/all/'
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -24,48 +25,76 @@ HEADERS = {
 
 def fetch_articles(url):
     """
-    Получает список статей со страницы.
-    Возвращает список словарей: {title, link, date, preview}
+    Получает список статей со страницы Хабра.
+    Собирает все текстовые поля карточки для поиска:
+    - заголовок
+    - preview-текст
+    - хабы (теги)
+    - автор
+    - компания
     """
     response = requests.get(url, headers=HEADERS)
     response.raise_for_status()
     
     soup = BeautifulSoup(response.text, 'html.parser')
-    
-    # Находим все статьи (каждая статья в tm-article-snippet)
     articles = []
     
-    # Ищем все блоки статей
     for article in soup.find_all('article'):
-        # Заголовок и ссылка
+        # --- Заголовок и ссылка ---
         title_tag = article.find('h2')
         if not title_tag:
             continue
-            
+        
         link_tag = title_tag.find('a')
         if not link_tag:
             continue
-            
+        
         title = link_tag.text.strip()
         link = link_tag.get('href')
         if not link.startswith('http'):
             link = 'https://habr.com' + link
         
-        # Дата
+        # --- Дата ---
         time_tag = article.find('time')
         date = time_tag.get('datetime') if time_tag else None
         
-        # Preview-текст
+        # --- Preview-текст ---
         preview_tag = article.find('div', class_='article-formatted-body')
         if not preview_tag:
             preview_tag = article.find('div', class_='tm-article-snippet__body')
         preview = preview_tag.text.strip() if preview_tag else ''
         
+        # --- Хабы (теги) ---
+        hubs = []
+        hub_tags = article.find_all('a', class_='tm-article-snippet__hubs-item-link')
+        if not hub_tags:
+            # Альтернативный класс для хабов
+            hub_tags = article.find_all('a', class_='hub-link')
+        for tag in hub_tags:
+            hubs.append(tag.text.strip())
+        
+        # --- Автор ---
+        author_tag = article.find('a', class_='tm-user-info__username')
+        if not author_tag:
+            author_tag = article.find('a', class_='tm-article-snippet__author')
+        author = author_tag.text.strip() if author_tag else ''
+        
+        # --- Компания ---
+        company_tag = article.find('a', class_='tm-user-info__company')
+        company = company_tag.text.strip() if company_tag else ''
+        
+        # --- Собираем весь текст для поиска ---
+        full_text = f"{title} {preview} {' '.join(hubs)} {author} {company}".lower()
+        
         articles.append({
             'title': title,
             'link': link,
             'date': date,
-            'preview': preview
+            'preview': preview,
+            'hubs': hubs,
+            'author': author,
+            'company': company,
+            'full_text': full_text
         })
     
     return articles
@@ -99,15 +128,17 @@ def main():
         found_articles = []
         
         for article in articles:
-            # Проверяем заголовок и preview
-            full_text = f"{article['title']} {article['preview']}"
-            found_keywords = check_keywords(full_text, KEYWORDS)
+            # Используем полный текст карточки (включая хабы, теги, автора)
+            found_keywords = check_keywords(article['full_text'], KEYWORDS)
             
             if found_keywords:
                 # Форматируем дату
                 if article['date']:
-                    date_obj = datetime.fromisoformat(article['date'].replace('Z', '+00:00'))
-                    date_str = date_obj.strftime('%d.%m.%Y')
+                    try:
+                        date_obj = datetime.fromisoformat(article['date'].replace('Z', '+00:00'))
+                        date_str = date_obj.strftime('%d.%m.%Y')
+                    except ValueError:
+                        date_str = 'Дата неизвестна'
                 else:
                     date_str = 'Дата неизвестна'
                 
@@ -115,7 +146,8 @@ def main():
                     'date': date_str,
                     'title': article['title'],
                     'link': article['link'],
-                    'keywords': found_keywords
+                    'keywords': found_keywords,
+                    'hubs': article.get('hubs', [])
                 })
         
         # Вывод результатов
@@ -123,6 +155,8 @@ def main():
             print(f"\nНайдено {len(found_articles)} подходящих статей:\n")
             for item in found_articles:
                 print(f"{item['date']} – {item['title']} – {item['link']}")
+                if item['hubs']:
+                    print(f"  Хабы: {', '.join(item['hubs'])}")
                 print(f"  Ключевые слова: {', '.join(item['keywords'])}")
                 print()
         else:
